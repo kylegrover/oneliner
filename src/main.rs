@@ -1,45 +1,41 @@
-use std::fs::File;
+use std::fs::{File, create_dir_all};
+use std::path::Path;
 
-use image::{codecs::pnm::PnmDecoder, ColorType, ImageDecoder};
+use image::{io::Reader as ImageReader, GenericImageView, GrayImage, RgbImage};
+use image::ColorType;
 use oneliner::{canny_devernay::Params, image_to_cycle, utils::*, write_pathes_as_svg};
 
 fn main() {
-    let args = std::env::args().into_iter().take(3).collect::<Vec<_>>();
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 3 {
+        eprintln!("Usage: {} <input_path> <output_prefix>", args[0]);
+        std::process::exit(1);
+    }
+
     let (input_path, output_prefix) = (&args[1], &args[2]);
     let input_path = std::path::Path::new(input_path);
     let input_file_name = input_path.file_name().unwrap().to_str().unwrap();
 
-    let image_file = File::open(input_path).unwrap();
-    let decoder = PnmDecoder::new(image_file).unwrap();
-    let (width, height) = decoder.dimensions();
-    let color_type = decoder.color_type();
-    let mut image_buf = vec![0; decoder.total_bytes() as usize];
-    decoder.read_image(image_buf.as_mut()).unwrap();
+    let img = ImageReader::open(&input_path).unwrap().decode().unwrap();
 
+    let (width, height) = img.dimensions();
+    let color_type = img.color();
+    println!("ColorType: {:?}", color_type);
+    
     let image_gray = match color_type {
-        ColorType::Rgb8 => image_buf
-            .chunks(3)
-            .map(|rgb| rgb_to_grayscale(rgb[0], rgb[1], rgb[2]))
-            .collect::<Vec<_>>(),
-        ColorType::L8 => image_buf,
+        ColorType::Rgb8 => {
+            let rgb_image: RgbImage = img.to_rgb8();
+            rgb_image.into_raw().chunks(3).map(|rgb| rgb_to_grayscale(rgb[0], rgb[1], rgb[2])).collect::<Vec<_>>()
+        },
+        ColorType::L8 => {
+            let gray_image: GrayImage = img.to_luma8();
+            gray_image.into_raw()
+        },
         _ => panic!("unsupported color type {:?}", color_type),
     };
 
     let params = vec![
-        // (0, 0, 0),
-        // (1, 0, 0),
-        // (2, 0, 0),
-        // (1, 5, 5),
-        // (1, 10, 10),
-        // (1, 15, 15),
-        // (1, 20, 20),
-        // (1, 5, 10),
-        // (1, 5, 15),
         (1, 5, 20),
-        // (1, 0, 15),
-        // (1, 1, 15),
-        // (1, 3, 15),
-        // (1, 10, 15),
     ];
 
     let num_pathes = 300;
@@ -61,17 +57,16 @@ fn main() {
 
         println!("num points = {}", final_path.len());
 
-        let svg_output_file = std::path::Path::new(output_prefix).join(format!(
-            "{}_{}_{}_{}_{}_hull_simplified_connected_eulerian_2.svg",
-            input_file_name, s, l, h, num_pathes
-        ));
+        let file_path = format!("{}_{}_{}_{}_{}_hull_simplified_connected_eulerian_2.svg",
+            input_file_name, s, l, h, num_pathes);
+        let svg_output_file = Path::new(output_prefix).join(file_path);
+        
+        // Create the output directory if it doesn't already exist.
+        if let Some(parent) = svg_output_file.parent() {
+           create_dir_all(parent).expect("Failed to create directory");
+        }
 
-        write_pathes_as_svg(
-            std::io::BufWriter::new(File::create(svg_output_file).unwrap()),
-            &[&final_path],
-            height as usize,
-            width as usize,
-        )
-        .unwrap();
+        write_pathes_as_svg(std::io::BufWriter::new(File::create(svg_output_file).unwrap()), &[&final_path],
+            height as usize, width as usize).unwrap();
     }
 }
